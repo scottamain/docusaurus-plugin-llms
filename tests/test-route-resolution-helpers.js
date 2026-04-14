@@ -216,6 +216,162 @@ async function runTests() {
       }
     }
 
+    // Test 7: Issue #31 — docsDir stripping prevents doubled paths
+    // When routeBasePath is '/', Docusaurus routes are /manual/get-started
+    // (not /docs/manual/get-started). Without docsDir stripping the tail
+    // would be "docs/manual/get-started" and fall through to the fallback,
+    // producing the doubled /docs/docs/manual/get-started URL.
+    console.log('\nTest 7: Issue #31 — docsDir stripping prevents docs/docs doubling');
+    {
+      await fs.ensureDir(path.join(DOCS_DIR, 'manual'));
+      await fs.writeFile(
+        path.join(DOCS_DIR, 'manual', 'get-started.md'),
+        '# Get Started\n\nGet started guide.'
+      );
+
+      const context = {
+        siteDir: TEST_DIR,
+        siteUrl: 'https://example.com',
+        docsDir: 'docs',
+        options: {},
+        routesPaths: ['/manual/get-started'],
+      };
+
+      const allFiles = [
+        path.join(DOCS_DIR, 'manual', 'get-started.md'),
+      ];
+
+      const results = await processFilesWithPatterns(context, allFiles);
+      const doc = results[0];
+
+      if (doc && doc.url === 'https://example.com/manual/get-started') {
+        console.log('  ✓ PASS: No docs/docs doubling — resolved to /manual/get-started');
+      } else {
+        console.log('  ✗ FAIL: Expected /manual/get-started (not /docs/docs/manual/get-started)');
+        console.log(`    Got: ${doc?.url}`);
+      }
+    }
+
+    // Test 8: Issue #30 — trailing-slash routes resolve correctly
+    console.log('\nTest 8: Issue #30 — trailing-slash routes produce correct URLs');
+    {
+      const context = {
+        siteDir: TEST_DIR,
+        siteUrl: 'https://example.com',
+        docsDir: 'docs',
+        options: {},
+        routesPaths: ['/simple/'],
+      };
+
+      const allFiles = [
+        path.join(DOCS_DIR, 'simple.md'),
+      ];
+
+      const results = await processFilesWithPatterns(context, allFiles);
+      const doc = results[0];
+
+      if (doc && doc.url === 'https://example.com/simple/') {
+        console.log('  ✓ PASS: Trailing-slash route matched and URL preserved');
+      } else {
+        console.log('  ✗ FAIL: Expected URL with trailing slash /simple/');
+        console.log(`    Got: ${doc?.url}`);
+      }
+    }
+
+    // Test 9: Directory collapsing (generics/generics.md -> /generics)
+    console.log('\nTest 9: Directory collapsing — dir/dir.md resolves to /dir');
+    {
+      await fs.ensureDir(path.join(DOCS_DIR, 'generics'));
+      await fs.writeFile(
+        path.join(DOCS_DIR, 'generics', 'generics.md'),
+        '# Generics\n\nGenerics documentation.'
+      );
+
+      const context = {
+        siteDir: TEST_DIR,
+        siteUrl: 'https://example.com',
+        docsDir: 'docs',
+        options: {},
+        routesPaths: ['/generics'],
+      };
+
+      const allFiles = [
+        path.join(DOCS_DIR, 'generics', 'generics.md'),
+      ];
+
+      const results = await processFilesWithPatterns(context, allFiles);
+      const doc = results[0];
+
+      if (doc && doc.url === 'https://example.com/generics') {
+        console.log('  ✓ PASS: generics/generics.md collapsed to /generics');
+      } else {
+        console.log('  ✗ FAIL: Expected /generics (not /generics/generics)');
+        console.log(`    Got: ${doc?.url}`);
+      }
+    }
+
+    // Test 10: Frontmatter id override — filename differs from route
+    console.log('\nTest 10: Frontmatter id override resolves correct route');
+    {
+      await fs.writeFile(
+        path.join(DOCS_DIR, 'python_to_mojo.md'),
+        '---\nid: python-to-mojo\n---\n# Python to Mojo\n\nMigration guide.'
+      );
+
+      const context = {
+        siteDir: TEST_DIR,
+        siteUrl: 'https://example.com',
+        docsDir: 'docs',
+        options: {},
+        routesPaths: ['/python-to-mojo'],
+      };
+
+      const allFiles = [
+        path.join(DOCS_DIR, 'python_to_mojo.md'),
+      ];
+
+      const results = await processFilesWithPatterns(context, allFiles);
+      const doc = results[0];
+
+      if (doc && doc.url === 'https://example.com/python-to-mojo') {
+        console.log('  ✓ PASS: Frontmatter id override resolved to /python-to-mojo');
+      } else {
+        console.log('  ✗ FAIL: Expected /python-to-mojo via frontmatter id override');
+        console.log(`    Got: ${doc?.url}`);
+      }
+    }
+
+    // Test 11: Frontmatter slug override
+    console.log('\nTest 11: Frontmatter slug override resolves correct route');
+    {
+      await fs.writeFile(
+        path.join(DOCS_DIR, 'intro.md'),
+        '---\nslug: /welcome\n---\n# Welcome\n\nWelcome page.'
+      );
+
+      const context = {
+        siteDir: TEST_DIR,
+        siteUrl: 'https://example.com',
+        docsDir: 'docs',
+        options: {},
+        routesPaths: ['/welcome'],
+      };
+
+      const allFiles = [
+        path.join(DOCS_DIR, 'intro.md'),
+      ];
+
+      const results = await processFilesWithPatterns(context, allFiles);
+      const doc = results[0];
+
+      if (doc && doc.url === 'https://example.com/welcome') {
+        console.log('  ✓ PASS: Frontmatter slug override resolved to /welcome');
+      } else {
+        console.log('  ✗ FAIL: Expected /welcome via frontmatter slug override');
+        console.log(`    Got: ${doc?.url}`);
+      }
+    }
+
     console.log('\n✓ All route resolution helper tests completed');
 
   } catch (err) {
