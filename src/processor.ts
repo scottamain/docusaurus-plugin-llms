@@ -231,6 +231,23 @@ export async function processMarkdownFile(
 }
 
 /**
+ * Collapse a trailing segment that matches its parent directory name.
+ * Docusaurus treats such files as directory indices
+ * (e.g. "generics/generics" → "generics", "API/API" → "API").
+ */
+function collapseMatchingTrailingSegment(urlPath: string): string {
+  const segments = urlPath.split('/');
+  if (segments.length >= 2) {
+    const last = segments[segments.length - 1];
+    const parent = segments[segments.length - 2];
+    if (last.toLowerCase() === parent.toLowerCase()) {
+      return segments.slice(0, -1).join('/');
+    }
+  }
+  return urlPath;
+}
+
+/**
  * Remove numbered prefixes from path segments (e.g., "01-intro" -> "intro")
  */
 function removeNumberedPrefixes(path: string): string {
@@ -313,13 +330,22 @@ function tryRoutesPathsMatch(
   pathPrefix: string
 ): string | undefined {
   const cleanPath = removeNumberedPrefixes(relativePath);
-  const normalizedCleanPath = cleanPath.toLowerCase();
+  const normalizedCleanPath = cleanPath.toLowerCase().replace(/\/+$/, '');
+
+  // Also try with directory-collapsed variant
+  const collapsedCleanPath = collapseMatchingTrailingSegment(normalizedCleanPath);
+  const candidates = [normalizedCleanPath];
+  if (collapsedCleanPath !== normalizedCleanPath) {
+    candidates.push(collapsedCleanPath);
+  }
 
   return routesPaths.find(routePath => {
-    const normalizedRoute = routePath.toLowerCase();
-    return normalizedRoute.endsWith(`/${normalizedCleanPath}`) ||
-           normalizedRoute === `/${pathPrefix}/${normalizedCleanPath}` ||
-           normalizedRoute === `/${normalizedCleanPath}`;
+    const normalizedRoute = routePath.toLowerCase().replace(/\/+$/, '');
+    return candidates.some(candidate =>
+      normalizedRoute.endsWith(`/${candidate}`) ||
+      normalizedRoute === `/${pathPrefix}/${candidate}` ||
+      normalizedRoute === `/${candidate}`
+    );
   });
 }
 
@@ -331,12 +357,12 @@ function tryRoutesPathsMatch(
  * @param context - Plugin context with route map
  * @returns Resolved URL or undefined if not found
  */
-function resolveDocumentUrl(
+async function resolveDocumentUrl(
   filePath: string,
   baseDir: string,
   pathPrefix: string,
   context: PluginContext
-): string | undefined {
+): Promise<string | undefined> {
   // Early return if no route map available
   if (!context.routeMap) {
     return undefined;
@@ -359,9 +385,86 @@ function resolveDocumentUrl(
     return prefixMatch;
   }
 
+  // When baseDir is siteDir, relativePath includes the docsDir prefix (e.g.
+  // "docs/docs/manual/get-started" for a file at siteDir/docs/docs/manual/get-started.mdx).
+  // The first "docs/" is the docsDir root which Docusaurus strips when computing routes,
+  // so we need to try lookups without it.
+  const { docsDir } = context;
+  const withoutDocsDir = (docsDir && relativePath.startsWith(`${docsDir}/`))
+    ? relativePath.substring(`${docsDir}/`.length)
+    : null;
+
+  // Build a list of candidate paths to try: the original relativePath, the
+  // docsDir-stripped variant, and directory-collapsed variants of each.
+  // Docusaurus treats a file as the directory index when its name matches the
+  // parent directory (e.g. generics/generics.mdx → /generics/).
+  const candidates: string[] = [relativePath];
+  if (withoutDocsDir) {
+    candidates.push(withoutDocsDir);
+  }
+
+  const allCandidates = [...candidates];
+  for (const candidate of candidates) {
+    const collapsed = collapseMatchingTrailingSegment(candidate);
+    if (collapsed !== candidate) {
+      allCandidates.push(collapsed);
+    }
+  }
+
+  for (const candidate of allCandidates) {
+    const exact = tryExactRouteMatch(context.routeMap, candidate, pathPrefix);
+    if (exact) return exact;
+
+    const prefix = tryNumberedPrefixResolution(context.routeMap, candidate, pathPrefix);
+    if (prefix) return prefix;
+  }
+
   // Try to find the best match using the routesPaths array
   if (context.routesPaths) {
-    return tryRoutesPathsMatch(context.routesPaths, relativePath, pathPrefix);
+    for (const candidate of allCandidates) {
+      const match = tryRoutesPathsMatch(context.routesPaths, candidate, pathPrefix);
+      if (match) return match;
+    }
+  }
+
+  // When frontmatter `id` or `slug` differs from the filename, the path-based
+  // lookups above will miss. Read frontmatter and retry with the overridden slug.
+  try {
+    const content = await readFile(filePath);
+    const { data } = matter(content);
+    const fmSlug = isNonEmptyString(data.slug) ? data.slug.replace(/^\/+|\/+$/g, '') : null;
+    const fmId = isNonEmptyString(data.id) ? data.id.replace(/^\/+|\/+$/g, '') : null;
+
+    if (fmSlug || fmId) {
+      const parentDir = normalizePath(path.dirname(relativePath));
+      const fmCandidates: string[] = [];
+
+      for (const override of [fmSlug, fmId]) {
+        if (!override) continue;
+        // Replace the last path segment with the frontmatter override
+        const overriddenPath = parentDir === '.' ? override : `${parentDir}/${override}`;
+        fmCandidates.push(overriddenPath);
+
+        // Also try with docsDir stripped
+        if (docsDir && overriddenPath.startsWith(`${docsDir}/`)) {
+          fmCandidates.push(overriddenPath.substring(`${docsDir}/`.length));
+        }
+      }
+
+      for (const candidate of fmCandidates) {
+        const exact = tryExactRouteMatch(context.routeMap, candidate, pathPrefix);
+        if (exact) return exact;
+      }
+
+      if (context.routesPaths) {
+        for (const candidate of fmCandidates) {
+          const match = tryRoutesPathsMatch(context.routesPaths, candidate, pathPrefix);
+          if (match) return match;
+        }
+      }
+    }
+  } catch {
+    // Frontmatter read failed; fall through
   }
 
   return undefined;
@@ -476,7 +579,7 @@ export async function processFilesWithPatterns(
         const pathPrefix = isBlogFile ? 'blog' : 'docs';
 
         // Try to find the resolved URL for this file from the route map
-        const resolvedUrl = resolveDocumentUrl(filePath, baseDir, pathPrefix, context);
+        const resolvedUrl = await resolveDocumentUrl(filePath, baseDir, pathPrefix, context);
 
         // Log when we successfully resolve a URL using Docusaurus routes
         if (resolvedUrl && context.routeMap) {
