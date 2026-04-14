@@ -250,6 +250,8 @@ module.exports = {
 
 ### Path Transformation Examples
 
+> **Note:** The plugin now resolves URLs by matching file paths against Docusaurus's actual routes (provided via the `postBuild` hook). Path transformations are only applied as a **fallback** when a file cannot be matched to a known route. In most configurations, you do not need `pathTransformation` at all.
+
 The path transformation feature allows you to manipulate how URLs are constructed from file paths:
 
 **Example 1**: Remove 'docs' from the URL path
@@ -1082,19 +1084,15 @@ The plugin:
 2. Optionally includes blog content
 3. Orders documents according to specified glob patterns (if provided)
 4. Extracts metadata, titles, and content from each file
-5. Creates proper URL links to each document section
-6. Applies path transformations according to configuration (removing or adding path segments)
-7. Generates a table of contents in `llms.txt`
-8. Combines all documentation content in `llms-full.txt`
-9. Creates custom LLM files based on specified configurations
-10. Provides statistics about the generated documentation
+5. Resolves each file's URL by suffix-matching against Docusaurus's known routes, falling back to path-based URL construction with optional path transformations
+6. Generates a table of contents in `llms.txt`
+7. Combines all documentation content in `llms-full.txt`
+8. Creates custom LLM files based on specified configurations
+9. Provides statistics about the generated documentation
 
 ## Testing
 
-The plugin includes comprehensive tests in the `tests` directory:
-
-- **Unit tests**: Test the path transformation functionality in isolation
-- **Integration tests**: Simulate a Docusaurus build with various configurations
+The plugin includes comprehensive tests in the `tests` directory covering route resolution, path transformation, content cleaning, error handling, and more.
 
 To run the tests:
 

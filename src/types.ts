@@ -2,8 +2,6 @@
  * Type definitions for the docusaurus-plugin-llms plugin
  */
 
-import type { LoadContext, RouteConfig } from '@docusaurus/types';
-
 /**
  * Interface for processed document information
  */
@@ -148,6 +146,4 @@ export interface PluginContext {
   docDescription: string;
   options: PluginOptions;
   routesPaths?: string[];
-  routes?: RouteConfig[];
-  routeMap?: Map<string, string>;
 } 

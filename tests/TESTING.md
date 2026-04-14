@@ -1,15 +1,21 @@
 # Testing the docusaurus-plugin-llms
 
-This document provides guidance on how to test the Docusaurus plugin, particularly the path transformation features.
+This document provides guidance on how to test the Docusaurus plugin.
+
+## Running All Tests
+
+The quickest way to run the full test suite (build + unit + integration):
+
+```bash
+npm test
+```
 
 ## Unit Testing
 
-We've provided two test scripts you can run to test the plugin functionality:
+### Path Transformation
 
 1. `tests/test-path-transforms.js` - Unit tests for the path transformation function
 2. `tests/test-path-transformation.js` - Integration tests that simulate a Docusaurus build
-
-### Running Unit Tests
 
 To test just the path transformation logic:
 
@@ -32,6 +38,22 @@ node tests/test-path-transformation.js
 ```
 
 This creates a test directory structure, runs the plugin with various configurations, and outputs the results for verification.
+
+### Route Resolution
+
+The plugin resolves file paths to URLs using suffix-based matching against Docusaurus's `routesPaths`. The following test files cover this behavior:
+
+1. `tests/test-route-resolution-helpers.js` - Integration tests through `processFilesWithPatterns`, including regression tests for issues #30 (trailing slash) and #31 (doubled `docs/docs/` paths)
+2. `tests/test-refactored-route-helpers.js` - Unit tests for suffix matching, directory collapsing, and numbered prefix removal
+3. `tests/test-numbered-prefixes.js` - Focused tests for numbered prefix scenarios
+
+These are standalone test files not included in `npm run test:unit`. Run them directly:
+
+```bash
+node tests/test-route-resolution-helpers.js
+node tests/test-refactored-route-helpers.js
+node tests/test-numbered-prefixes.js
+```
 
 ## Testing in a Real Docusaurus Project
 
@@ -87,6 +109,8 @@ To test the plugin in a real Docusaurus project:
    After building, check the `build` directory for the generated `llms.txt` and `llms-full.txt` files. Verify that the URLs are transformed according to your configuration.
 
 ## Verifying URL Transformations
+
+> **Note:** Path transformations are now only applied as a fallback when a file cannot be matched to a known Docusaurus route. In most configurations, URLs are resolved automatically via suffix-based route matching.
 
 When testing path transformations, verify that:
 
