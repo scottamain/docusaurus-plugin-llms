@@ -1,108 +1,129 @@
 # Testing the docusaurus-plugin-llms
 
-This document provides guidance on how to test the Docusaurus plugin, particularly the path transformation features.
+## Running Tests
 
-## Unit Testing
-
-We've provided two test scripts you can run to test the plugin functionality:
-
-1. `tests/test-path-transforms.js` - Unit tests for the path transformation function
-2. `tests/test-path-transformation.js` - Integration tests that simulate a Docusaurus build
-
-### Running Unit Tests
-
-To test just the path transformation logic:
+Run the full test suite (build + unit + integration):
 
 ```bash
-node tests/test-path-transforms.js
+npm test
 ```
 
-This will run a series of test cases against the path transformation function and verify the results.
-
-### Running Integration Tests
-
-To run the integration tests that simulate a Docusaurus build:
+Or run individual stages:
 
 ```bash
-# Build the plugin first
-npm run build
-
-# Then run the tests
-node tests/test-path-transformation.js
+npm run build            # Compile TypeScript
+npm run test:unit        # Unit tests only
+npm run test:integration # Integration tests only
 ```
 
-This creates a test directory structure, runs the plugin with various configurations, and outputs the results for verification.
+### Standalone Test Files
+
+Some test files are not included in `npm run test:unit` but can be run directly:
+
+```bash
+node tests/test-route-resolution-helpers.js   # Route resolution integration tests
+node tests/test-refactored-route-helpers.js   # Suffix-matching unit tests
+node tests/test-numbered-prefixes.js          # Numbered prefix handling
+```
+
+## Test Categories
+
+### Route Resolution (`test-route-resolution-helpers.js`)
+
+Integration tests that exercise `processFilesWithPatterns` end-to-end with
+real files on disk. Covers:
+
+- **Suffix-based matching** — files resolve to routes via `routesPaths`
+- **Numbered prefix stripping** — `01-intro.md` matches `/intro`
+- **docsDir stripping** (Issue #31) — prevents doubled `docs/docs/` paths
+  when `routeBasePath: '/'`
+- **Trailing-slash routes** (Issue #30) — routes like `/intro/` match correctly
+- **Directory collapsing** — `generics/generics.md` resolves to `/generics`
+- **Frontmatter overrides** — files with `id` or `slug` in frontmatter
+  resolve correctly when the filename differs from the route
+- **Versioned route disambiguation** — shortest route (stable) preferred
+  over versioned (`/nightly/...`)
+- **Fallback** — graceful path-based URL construction when `routesPaths`
+  is not available
+
+### Route Helpers (`test-refactored-route-helpers.js`)
+
+Unit tests for the individual helper functions used by route resolution:
+
+- `findMatchingRoute` — suffix matching, edge cases, shortest-match preference
+- `collapseMatchingTrailingSegment` — directory index collapsing
+- `removeNumberedPrefixes` — `01-category/02-file` → `category/file`
+- Path normalization — extension removal, index handling, Windows paths
+- URL construction — `new URL()` with various `siteUrl` formats
+
+### Numbered Prefixes (`test-numbered-prefixes.js`)
+
+Focused tests for numbered prefix scenarios: exact match priority,
+fallback to prefix removal, multi-level nesting, mixed segments,
+trailing slashes, and versioned route disambiguation.
+
+### Path Transformation (`test-path-transforms.js`, `test-path-transformation.js`)
+
+Tests for the `pathTransformation` option (`ignorePaths`, `addPaths`).
+
+### Other Tests
+
+The `test:unit` script runs ~27 additional test files covering:
+
+- Plugin option validation and input sanitization
+- Markdown processing (import removal, header deduplication, partials)
+- File I/O error handling, BOM detection, circular import detection
+- URL encoding, filename sanitization, regex safety
+- Batch/parallel processing, path length validation
 
 ## Testing in a Real Docusaurus Project
 
 To test the plugin in a real Docusaurus project:
 
-1. **Create a new Docusaurus site**:
+1. **Link or reference your local plugin**:
 
-   ```bash
-   npx @docusaurus/init@latest init my-test-site classic
-   cd my-test-site
+   In your Docusaurus project's `package.json`:
+   ```json
+   "docusaurus-plugin-llms": "file:/path/to/docusaurus-plugin-llms"
    ```
 
-2. **Link your plugin for local development**:
+   Then run `npm install`.
 
-   From your plugin directory:
-   ```bash
-   npm link
-   ```
-
-   From your Docusaurus project:
-   ```bash
-   npm link docusaurus-plugin-llms
-   ```
-
-3. **Add the plugin to your docusaurus.config.js**:
+2. **Add the plugin to `docusaurus.config.js`**:
 
    ```js
-   module.exports = {
-     // ... other config
-     plugins: [
-       [
-         'docusaurus-plugin-llms',
-         {
-           // Test your path transformation options
-           pathTransformation: {
-             ignorePaths: ['api'],
-             addPaths: ['reference'],
-           },
-         },
-       ],
+   plugins: [
+     [
+       'docusaurus-plugin-llms',
+       {
+         title: 'My Documentation',
+         description: 'Description of the docs.',
+         excludeImports: true,
+         removeDuplicateHeadings: true,
+       },
      ],
-   };
+   ],
    ```
 
-4. **Build the Docusaurus site**:
+3. **Build and inspect**:
 
    ```bash
    npm run build
    ```
 
-5. **Check the output**:
+   Check `build/llms.txt` and verify that URLs match your site's actual routes.
 
-   After building, check the `build` directory for the generated `llms.txt` and `llms-full.txt` files. Verify that the URLs are transformed according to your configuration.
+## How Route Resolution Works
 
-## Verifying URL Transformations
+The plugin resolves file paths to URLs using suffix-based matching against
+Docusaurus's `routesPaths` (provided in the `postBuild` hook). This avoids
+needing to know about `routeBasePath`, version prefixes, or `baseUrl` — any
+route ending with the file's path tail is a match.
 
-When testing path transformations, verify that:
-
-1. **ignorePaths**: Path segments specified are removed from the URLs
-2. **addPaths**: Path segments are added to the URLs when they don't already exist
-3. **Combined transformations**: Both operations work correctly together
-
-Example paths to test:
-
-- `docs/getting-started.md` → should become → `getting-started` (with ignorePaths: ['docs'])
-- `docs/api/method.md` → should become → `reference/api/method` (with ignorePaths: ['docs'], addPaths: ['reference'])
-
-## Troubleshooting
-
-If you encounter issues with path transformations:
-
-1. Check the regex in the `applyPathTransformations` function
-2. Verify that the path segments are properly formatted (no leading/trailing slashes)
-3. Run the unit tests to isolate potential issues 
+Resolution order:
+1. Strip `docsDir` prefix and file extension to get a "tail"
+2. Try suffix match against `routesPaths` (original tail)
+3. Try directory-collapsed tail (`generics/generics` → `generics`)
+4. Try numbered-prefix-stripped tail (`01-intro` → `intro`)
+5. Read frontmatter `slug`/`id` and retry suffix match
+6. Fall back to path-based URL construction
