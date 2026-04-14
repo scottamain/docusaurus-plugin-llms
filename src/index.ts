@@ -9,7 +9,7 @@
  */
 
 import * as path from 'path';
-import type { LoadContext, Plugin, Props, RouteConfig } from '@docusaurus/types';
+import type { LoadContext, Plugin, Props } from '@docusaurus/types';
 import { PluginOptions, PluginContext, CustomLLMFile } from './types';
 import { collectDocFiles, generateStandardLLMFiles, generateCustomLLMFiles } from './generator';
 import { setLogLevel, LogLevel, logger, getErrorMessage, isDefined, isNonEmptyString, isNonEmptyArray } from './utils';
@@ -292,35 +292,12 @@ export default function docusaurusPluginLLMs(
       try {
         let enhancedContext = pluginContext;
         
-        // If props are provided (Docusaurus 3.x+), use the resolved routes
-        if (props?.routes) {
-          // Create a map of file paths to their resolved URLs
-          const routeMap = new Map<string, string>();
-          
-          // Helper function to recursively process routes
-          const processRoutes = (routes: RouteConfig[]) => {
-            routes.forEach(route => {
-              if (route.path) {
-                // Store the actual resolved path
-                routeMap.set(route.path, route.path);
-              }
-              
-              // Process nested routes recursively
-              if (route.routes) {
-                processRoutes(route.routes);
-              }
-            });
-          };
-          
-          // Process all routes (cast to RouteConfig[] for recursive processing)
-          processRoutes(props.routes as RouteConfig[]);
-          
-          // Pass the resolved routes to the plugin context
+        // If props are provided (Docusaurus 3.x+), pass the resolved route
+        // paths so route resolution can match files to their actual URLs
+        if (props?.routesPaths) {
           enhancedContext = {
             ...pluginContext,
             routesPaths: props.routesPaths,
-            routes: props.routes,
-            routeMap,
           };
         }
         

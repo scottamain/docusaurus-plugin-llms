@@ -231,6 +231,29 @@ export async function processMarkdownFile(
 }
 
 /**
+ * Find the best matching route for a given path tail using suffix matching.
+ * This avoids needing to know about version prefixes, baseUrl, or other
+ * routing details — any route ending with the tail is a match.
+ * When multiple routes match, the shortest is preferred (typically the
+ * stable/non-versioned route over a versioned one like /nightly/...).
+ */
+function findMatchingRoute(
+  routesPaths: string[],
+  tail: string
+): string | undefined {
+  const normalized = tail.toLowerCase().replace(/\/+$/, '');
+  if (!normalized) return undefined;
+
+  const matches = routesPaths.filter(route => {
+    const r = route.toLowerCase().replace(/\/+$/, '');
+    return r === `/${normalized}` || r.endsWith(`/${normalized}`);
+  });
+
+  if (matches.length <= 1) return matches[0];
+  return matches.sort((a, b) => a.length - b.length)[0];
+}
+
+/**
  * Collapse a trailing segment that matches its parent directory name.
  * Docusaurus treats such files as directory indices
  * (e.g. "generics/generics" → "generics", "API/API" → "API").
@@ -250,218 +273,71 @@ function collapseMatchingTrailingSegment(urlPath: string): string {
 /**
  * Remove numbered prefixes from path segments (e.g., "01-intro" -> "intro")
  */
-function removeNumberedPrefixes(path: string): string {
-  return path.split('/').map(segment => {
-    // Remove numbered prefixes like "01-", "1-", "001-" from each segment
+function removeNumberedPrefixes(pathStr: string): string {
+  return pathStr.split('/').map(segment => {
     return segment.replace(/^\d+-/, '');
   }).join('/');
 }
 
 /**
- * Try to find a route in the route map from a list of possible paths
- */
-function findRouteInMap(routeMap: Map<string, string>, possiblePaths: string[]): string | undefined {
-  for (const possiblePath of possiblePaths) {
-    const route = routeMap.get(possiblePath) || routeMap.get(possiblePath + '/');
-    if (route) {
-      return route;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Try exact match for route resolution
- */
-function tryExactRouteMatch(
-  routeMap: Map<string, string>,
-  relativePath: string,
-  pathPrefix: string
-): string | undefined {
-  const possiblePaths = [
-    `/${pathPrefix}/${relativePath}`,
-    `/${relativePath}`,
-  ];
-  return findRouteInMap(routeMap, possiblePaths);
-}
-
-/**
- * Try route resolution with numbered prefix removal
- */
-function tryNumberedPrefixResolution(
-  routeMap: Map<string, string>,
-  relativePath: string,
-  pathPrefix: string
-): string | undefined {
-  const cleanPath = removeNumberedPrefixes(relativePath);
-
-  // Try basic cleaned path
-  const basicPaths = [`/${pathPrefix}/${cleanPath}`, `/${cleanPath}`];
-  const basicMatch = findRouteInMap(routeMap, basicPaths);
-  if (basicMatch) {
-    return basicMatch;
-  }
-
-  // Try nested folder structures with numbered prefixes at different levels
-  const segments = relativePath.split('/');
-  if (segments.length > 1) {
-    for (let i = 0; i < segments.length; i++) {
-      const modifiedSegments = [...segments];
-      modifiedSegments[i] = modifiedSegments[i].replace(/^\d+-/, '');
-      const modifiedPath = modifiedSegments.join('/');
-      const pathsToTry = [`/${pathPrefix}/${modifiedPath}`, `/${modifiedPath}`];
-
-      const match = findRouteInMap(routeMap, pathsToTry);
-      if (match) {
-        return match;
-      }
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Try finding best match using routes paths array
- */
-function tryRoutesPathsMatch(
-  routesPaths: string[],
-  relativePath: string,
-  pathPrefix: string
-): string | undefined {
-  const cleanPath = removeNumberedPrefixes(relativePath);
-  const normalizedCleanPath = cleanPath.toLowerCase().replace(/\/+$/, '');
-
-  // Also try with directory-collapsed variant
-  const collapsedCleanPath = collapseMatchingTrailingSegment(normalizedCleanPath);
-  const candidates = [normalizedCleanPath];
-  if (collapsedCleanPath !== normalizedCleanPath) {
-    candidates.push(collapsedCleanPath);
-  }
-
-  return routesPaths.find(routePath => {
-    const normalizedRoute = routePath.toLowerCase().replace(/\/+$/, '');
-    return candidates.some(candidate =>
-      normalizedRoute.endsWith(`/${candidate}`) ||
-      normalizedRoute === `/${pathPrefix}/${candidate}` ||
-      normalizedRoute === `/${candidate}`
-    );
-  });
-}
-
-/**
- * Resolve the URL for a document using Docusaurus routes
- * @param filePath - Full path to the file
- * @param baseDir - Base directory (typically siteDir)
- * @param pathPrefix - Path prefix ('docs' or 'blog')
- * @param context - Plugin context with route map
- * @returns Resolved URL or undefined if not found
+ * Resolve the URL for a document by matching its file path against
+ * Docusaurus's resolved routes using suffix matching.
+ *
+ * The approach: strip the docsDir prefix and file extension to get a "tail"
+ * (e.g. "docs/manual/get-started"), then find any route ending with that
+ * tail. This naturally handles version prefixes (/nightly/...), custom
+ * baseUrl, and routeBasePath without needing to know about them.
+ *
+ * Falls back to reading frontmatter when the file's `id` or `slug` differs
+ * from its filename (e.g. python_to_mojo.mdx with id: python-to-mojo).
  */
 async function resolveDocumentUrl(
   filePath: string,
   baseDir: string,
-  pathPrefix: string,
   context: PluginContext
 ): Promise<string | undefined> {
-  // Early return if no route map available
-  if (!context.routeMap) {
-    return undefined;
-  }
+  if (!context.routesPaths?.length) return undefined;
 
-  // Convert file path to a potential route path
-  const relativePath = normalizePath(path.relative(baseDir, filePath))
+  const { docsDir } = context;
+
+  const relative = normalizePath(path.relative(baseDir, filePath))
     .replace(/\.mdx?$/, '')
     .replace(/\/index$/, '');
 
-  // Try exact match first (respects Docusaurus's resolved routes)
-  const exactMatch = tryExactRouteMatch(context.routeMap, relativePath, pathPrefix);
-  if (exactMatch) {
-    return exactMatch;
+  // Strip the docsDir prefix — docsDir is the filesystem root for the docs
+  // plugin, which Docusaurus removes when computing routes
+  let tail = relative;
+  if (docsDir && tail.startsWith(`${docsDir}/`)) {
+    tail = tail.substring(`${docsDir}/`.length);
   }
 
-  // Try numbered prefix removal as fallback
-  const prefixMatch = tryNumberedPrefixResolution(context.routeMap, relativePath, pathPrefix);
-  if (prefixMatch) {
-    return prefixMatch;
+  // Build candidate tails: original, directory-collapsed, numbered-prefix-stripped
+  const tails = new Set<string>([tail]);
+
+  const collapsed = collapseMatchingTrailingSegment(tail);
+  if (collapsed !== tail) tails.add(collapsed);
+
+  const stripped = removeNumberedPrefixes(tail);
+  if (stripped !== tail) tails.add(stripped);
+
+  for (const t of tails) {
+    const match = findMatchingRoute(context.routesPaths, t);
+    if (match) return match;
   }
 
-  // When baseDir is siteDir, relativePath includes the docsDir prefix (e.g.
-  // "docs/docs/manual/get-started" for a file at siteDir/docs/docs/manual/get-started.mdx).
-  // The first "docs/" is the docsDir root which Docusaurus strips when computing routes,
-  // so we need to try lookups without it.
-  const { docsDir } = context;
-  const withoutDocsDir = (docsDir && relativePath.startsWith(`${docsDir}/`))
-    ? relativePath.substring(`${docsDir}/`.length)
-    : null;
-
-  // Build a list of candidate paths to try: the original relativePath, the
-  // docsDir-stripped variant, and directory-collapsed variants of each.
-  // Docusaurus treats a file as the directory index when its name matches the
-  // parent directory (e.g. generics/generics.mdx → /generics/).
-  const candidates: string[] = [relativePath];
-  if (withoutDocsDir) {
-    candidates.push(withoutDocsDir);
-  }
-
-  const allCandidates = [...candidates];
-  for (const candidate of candidates) {
-    const collapsed = collapseMatchingTrailingSegment(candidate);
-    if (collapsed !== candidate) {
-      allCandidates.push(collapsed);
-    }
-  }
-
-  for (const candidate of allCandidates) {
-    const exact = tryExactRouteMatch(context.routeMap, candidate, pathPrefix);
-    if (exact) return exact;
-
-    const prefix = tryNumberedPrefixResolution(context.routeMap, candidate, pathPrefix);
-    if (prefix) return prefix;
-  }
-
-  // Try to find the best match using the routesPaths array
-  if (context.routesPaths) {
-    for (const candidate of allCandidates) {
-      const match = tryRoutesPathsMatch(context.routesPaths, candidate, pathPrefix);
-      if (match) return match;
-    }
-  }
-
-  // When frontmatter `id` or `slug` differs from the filename, the path-based
-  // lookups above will miss. Read frontmatter and retry with the overridden slug.
+  // When frontmatter `id` or `slug` differs from the filename, the
+  // path-based lookups above will miss. Read frontmatter and retry.
   try {
     const content = await readFile(filePath);
     const { data } = matter(content);
-    const fmSlug = isNonEmptyString(data.slug) ? data.slug.replace(/^\/+|\/+$/g, '') : null;
-    const fmId = isNonEmptyString(data.id) ? data.id.replace(/^\/+|\/+$/g, '') : null;
 
-    if (fmSlug || fmId) {
-      const parentDir = normalizePath(path.dirname(relativePath));
-      const fmCandidates: string[] = [];
-
-      for (const override of [fmSlug, fmId]) {
-        if (!override) continue;
-        // Replace the last path segment with the frontmatter override
-        const overriddenPath = parentDir === '.' ? override : `${parentDir}/${override}`;
-        fmCandidates.push(overriddenPath);
-
-        // Also try with docsDir stripped
-        if (docsDir && overriddenPath.startsWith(`${docsDir}/`)) {
-          fmCandidates.push(overriddenPath.substring(`${docsDir}/`.length));
-        }
-      }
-
-      for (const candidate of fmCandidates) {
-        const exact = tryExactRouteMatch(context.routeMap, candidate, pathPrefix);
-        if (exact) return exact;
-      }
-
-      if (context.routesPaths) {
-        for (const candidate of fmCandidates) {
-          const match = tryRoutesPathsMatch(context.routesPaths, candidate, pathPrefix);
-          if (match) return match;
-        }
-      }
+    for (const override of [data.slug, data.id]) {
+      if (!isNonEmptyString(override)) continue;
+      const slug = override.replace(/^\/+|\/+$/g, '');
+      const parentDir = path.dirname(tail);
+      const overriddenTail = parentDir === '.' ? slug : `${parentDir}/${slug}`;
+      const match = findMatchingRoute(context.routesPaths, overriddenTail);
+      if (match) return match;
     }
   } catch {
     // Frontmatter read failed; fall through
@@ -572,23 +448,14 @@ export async function processFilesWithPatterns(
   const results = await Promise.allSettled(
     filesToProcess.map(async (filePath) => {
       try {
-        // Determine if this is a blog or docs file
-        const isBlogFile = filePath.includes(path.join(siteDir, 'blog'));
-        // Use siteDir as baseDir to preserve full directory structure (docs/path/file.md instead of just path/file.md)
         const baseDir = siteDir;
+        const isBlogFile = filePath.includes(path.join(siteDir, 'blog'));
         const pathPrefix = isBlogFile ? 'blog' : 'docs';
 
-        // Try to find the resolved URL for this file from the route map
-        const resolvedUrl = await resolveDocumentUrl(filePath, baseDir, pathPrefix, context);
+        const resolvedUrl = await resolveDocumentUrl(filePath, baseDir, context);
 
-        // Log when we successfully resolve a URL using Docusaurus routes
-        if (resolvedUrl && context.routeMap) {
-          const relativePath = normalizePath(path.relative(baseDir, filePath))
-            .replace(/\.mdx?$/, '')
-            .replace(/\/index$/, '');
-          if (resolvedUrl !== `/${pathPrefix}/${relativePath}`) {
-            logger.verbose(`Resolved URL for ${path.basename(filePath)}: ${resolvedUrl} (was: /${pathPrefix}/${relativePath})`);
-          }
+        if (resolvedUrl) {
+          logger.verbose(`Resolved URL for ${path.basename(filePath)}: ${resolvedUrl}`);
         }
 
         const docInfo = await processMarkdownFile(
