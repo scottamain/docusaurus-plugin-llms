@@ -5,6 +5,18 @@ All notable changes to the docusaurus-plugin-llms will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-14
+
+### Fixed
+
+- **[#31]** Doubled `docs/docs/` paths when `routeBasePath: '/'` and docs live in a nested `docs/` subdirectory
+- **[#30]** `trailingSlash: true` not reflected in generated URLs
+
+### Changed
+
+- Replaced `routeMap` construction with suffix-based matching against Docusaurus's `routesPaths`, removing ~150 lines of production code and five edge-case helper functions
+- `pathTransformation` is now only applied as a fallback when a file cannot be matched to a known Docusaurus route
+
 ## [0.3.0] - 2026-02-07
 
 ### Fixed
